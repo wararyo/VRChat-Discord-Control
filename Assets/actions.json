@@ -1,0 +1,47 @@
+{
+  "default_bindings": [
+    {
+      "controller_type": "oculus_touch",
+      "binding_url": "vrc_discord_control_oculus.json"
+    }
+  ],
+  "actions": [
+    {
+      "name": "/actions/mic_mute/in/toggle_mute",
+      "requirement": "suggested",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/mic_mute/in/unmute_vrchat",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/mic_mute/in/unmute_discord",
+      "requirement": "optional",
+      "type": "boolean"
+    }
+  ],
+  "action_sets": [
+    {
+      "name": "/actions/mic_mute",
+      "usage": "leftright"
+    }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_us",
+      "/actions/mic_mute": "Mic Mute",
+      "/actions/mic_mute/in/toggle_mute": "Toggle Mute",
+      "/actions/mic_mute/in/unmute_vrchat": "Unmute VRChat (mute Discord)",
+      "/actions/mic_mute/in/unmute_discord": "Toggle Mute (mute VRChat)"
+    },
+    {
+      "language_tag": "ja",
+      "/actions/mic_mute": "マイクミュート",
+      "/actions/mic_mute/in/toggle_mute": "ミュートを切り替え",
+      "/actions/mic_mute/in/unmute_vrchat": "VRChatに切り替え",
+      "/actions/mic_mute/in/unmute_discord": "Discordに切り替え"
+    }
+  ]
+}

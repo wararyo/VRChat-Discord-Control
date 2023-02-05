@@ -1,0 +1,17 @@
+{
+	"source" : "builtin",
+	"applications": [
+		{
+			"app_key": "wararyo.vrc-discord-control",
+			"launch_type": "binary",
+			"binary_path_windows": "VRC Discord Control.exe",
+			"is_dashboard_overlay": true,
+			"strings": {
+				"en_us": {
+					"name": "VRC Discord Control",
+					"description": "Switch the mute state of Discord according to that of VRChat."
+				}
+			}
+		}
+	]
+}
