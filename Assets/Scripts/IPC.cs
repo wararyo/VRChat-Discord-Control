@@ -1,13 +1,16 @@
 ﻿using System;
-using System.IO.Pipes;
+using System.Threading;
 using System.Text;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Lachee.IO;
 
 public class IpcClient
 {
+    public Action<IpcPacket> OnReceive;
+
     private NamedPipeClientStream stream;
 
     string GetPipeName(int id)
@@ -15,15 +18,16 @@ public class IpcClient
         return $"discord-ipc-{id}";
     }
 
-    public async UniTask Connect()
+    public async UniTask Connect(CancellationToken cancellationToken = default)
     {
         for (int i = 0; i < 10; i++)
         {
             try
             {
                 stream = new NamedPipeClientStream(".", GetPipeName(i));
-                await UniTask.RunOnThreadPool(() => stream.Connect());
+                await UniTask.RunOnThreadPool(() => stream.Connect(), cancellationToken: cancellationToken);
                 Debug.Log($"IPC Connected: " + GetPipeName(i));
+                BeginReceiving(cancellationToken);
                 break;
             }
             catch (Exception e)
@@ -38,7 +42,23 @@ public class IpcClient
         }
     }
 
-    public async UniTask Send(IpcPacket packet)
+    void BeginReceiving(CancellationToken cancellationToken = default)
+    {
+        if (stream == null)
+            throw new InvalidOperationException();
+        UniTask.RunOnThreadPool(async () =>
+        {
+            while (stream.IsConnected && !cancellationToken.IsCancellationRequested)
+            {
+                var buffer = new byte[4096];
+                var len = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                if (len > 0) OnReceive?.Invoke(new IpcPacket(buffer, len));
+                await UniTask.Delay(100);
+            }
+        }, cancellationToken: cancellationToken);
+    }
+
+    public async UniTask Send(IpcPacket packet, CancellationToken cancellationToken = default)
     {
         if (stream == null)
             throw new InvalidOperationException();
@@ -46,21 +66,17 @@ public class IpcClient
         await UniTask.RunOnThreadPool(() =>
         {
             stream.Write(bytes, 0, bytes.Length);
-        });
-    }
-
-    public async UniTask<IpcPacket> Receive()
-    {
-        if (stream == null)
-            throw new InvalidOperationException();
-        var buffer = new byte[4096];
-        var len = await stream.ReadAsync(buffer, 0, buffer.Length);
-        return new IpcPacket(buffer, len);
+        }, cancellationToken: cancellationToken);
     }
 
     public void Dispose()
     {
-        if (stream != null) stream.Dispose();
+        if (stream != null)
+        {
+            stream.Disconnect();
+            stream.Close();
+            stream.Dispose();
+        }
     }
 }
 

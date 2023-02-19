@@ -1,5 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.Networking;
 using System.Collections;
 using Cysharp.Threading.Tasks;
@@ -13,27 +16,59 @@ public class DiscordRpc : MonoBehaviour
     public string clientSecret;
     public string[] scopes;
 
-    IpcClient client;
+    [Serializable]
+    public class BoolEvent : UnityEvent<bool> { }
+
+    public BoolEvent onMuteChanged;
+
+    IpcClient client = new IpcClient();
     public bool isConnected { get; private set; } = false;
+
+    /// <summary>
+    /// Discordから受信したパケットのリスナー
+    /// </summary>
+    struct Listener
+    {
+        /// <summary>
+        /// 返答を待っているリクエストのnonce、またはSubscribeしたイベントのイベント名、またはOpcode名(FRAME以外の場合)
+        /// </summary>
+        public string identifier;
+        /// <summary>
+        /// レスポンス後にこのリスナーを削除するか(イベントの場合はfalse、それ以外の場合はtrueを想定)
+        /// </summary>
+        public bool once;
+        public Action<IpcPacket> callback;
+        public Listener(string identifier, bool once, Action<IpcPacket> callback)
+        {
+            this.identifier = identifier;
+            this.once = once;
+            this.callback = callback;
+        }
+    }
+    List<Listener> listeners = new List<Listener>();
 
     async void Start()
     {
-        //var cancellationToken = this.GetCancellationTokenOnDestroy();
-        client = new IpcClient();
+        client.OnReceive = OnReceive;
 
-        await client.Connect();
-        isConnected = true;
-        Debug.Log(await Handshake());
+        await client.Connect(this.GetCancellationTokenOnDestroy());
+        await Handshake();
+
         var authorizeData = await Authorize();
         string code = authorizeData.data["data"]?["code"]?.Value<string>();
         if (code == null) throw new Exception("Failed to get code.");
-        Debug.Log(code);
         string accessToken = await FetchAccessToken(code);
-        Debug.Log(await Authenticate(accessToken));
-        bool? muted = await GetMute();
-        await SetMute((!muted) ?? true);
-        Debug.Log(await Subscribe("VOICE_SETTINGS_UPDATE"));
-        Debug.Log(await client.Receive());
+        await Authenticate(accessToken);
+
+        isConnected = true;
+
+        await Subscribe("VOICE_SETTINGS_UPDATE",OnVoiceSettingsUpdated);
+    }
+
+    void OnDisable()
+    {
+        if (client != null)
+            client.Dispose();
     }
 
     void OnDestroy()
@@ -42,11 +77,52 @@ public class DiscordRpc : MonoBehaviour
             client.Dispose();
     }
 
-    async UniTask<IpcPacket> SendForRequest(IpcPacket packet)
+    #region イベント処理
+
+    /// <summary>
+    /// IpcClientから受信したパケットを処理します。
+    /// </summary>
+    /// <param name="packet"></param>
+    void OnReceive(IpcPacket packet)
     {
-        await client.Send(packet);
-        return await client.Receive();
+        // nonceを取得、なければイベント名を取得
+        var identifier = packet.data["nonce"]?.Value<string>();
+        if (identifier == null) identifier = packet.data["evt"]?.Value<string>();
+        if (identifier == null) throw new Exception("Neither nonce nor evt could be found.");
+        listeners.FindAll((l) => l.identifier == identifier).ForEach((l) =>
+        {
+            l.callback(packet);
+            if (l.once) listeners.Remove(l);
+        });
     }
+
+    void OnVoiceSettingsUpdated(IpcPacket packet)
+    {
+        bool? muted = packet.data["data"]?["mute"]?.Value<bool>();
+        if (muted != null) onMuteChanged.Invoke((bool)muted);
+    }
+
+    /// <summary>
+    /// パケットを送信し、それに対する返答を待ちます。
+    /// </summary>
+    /// <param name="packet"></param>
+    /// <returns></returns>
+    async UniTask<IpcPacket> SendForResponse(IpcPacket packet) {
+        // FRAMEの場合はnonceを、それ以外の場合はOpcodeを識別子とする
+        string identifier = packet.opcode == IpcPacket.Opcodes.FRAME ? packet.data["nonce"]?.Value<string>() : packet.opcode.ToString();
+        if (identifier == null) throw new Exception("Nonce is not set.");
+        await client.Send(packet, this.GetCancellationTokenOnDestroy());
+
+        IpcPacket response = null;
+        Action<IpcPacket> listener = (p) => response = p;
+        listeners.Add(new Listener(identifier, true, listener));
+        await UniTask.WaitUntil(() => response != null, cancellationToken: this.GetCancellationTokenOnDestroy());
+        return response;
+    }
+
+    #endregion
+
+    #region Discordに対する各種操作
 
     public async UniTask<IpcPacket> Handshake()
     {
@@ -56,7 +132,13 @@ public class DiscordRpc : MonoBehaviour
             ["client_id"] = clientId
         };
         IpcPacket packet = new IpcPacket(IpcPacket.Opcodes.HANDSHAKE, handshake);
-        return await SendForRequest(packet);
+        await client.Send(packet, this.GetCancellationTokenOnDestroy());
+
+        IpcPacket response = null;
+        Action<IpcPacket> listener = (p) => response = p;
+        listeners.Add(new Listener("READY", true, listener));
+        await UniTask.WaitUntil(() => response != null, cancellationToken: this.GetCancellationTokenOnDestroy());
+        return response;
     }
 
     public async UniTask<IpcPacket> Authorize()
@@ -71,7 +153,7 @@ public class DiscordRpc : MonoBehaviour
             },
             ["nonce"] = Nonce()
         };
-        return await SendForRequest(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        return await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
     }
 
     public async UniTask<string> FetchAccessToken(string code)
@@ -100,7 +182,7 @@ public class DiscordRpc : MonoBehaviour
             },
             ["nonce"] = Nonce()
         };
-        return await SendForRequest(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        return await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
     }
 
     public async UniTask<bool?> GetMute()
@@ -111,7 +193,7 @@ public class DiscordRpc : MonoBehaviour
             ["args"] = new JObject { },
             ["nonce"] = Nonce()
         };
-        var setting = await SendForRequest(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        var setting = await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
         return setting.data["data"]?["mute"]?.Value<bool>();
     }
 
@@ -126,10 +208,10 @@ public class DiscordRpc : MonoBehaviour
             },
             ["nonce"] = Nonce()
         };
-        return await SendForRequest(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        return await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
     }
 
-    public async UniTask<IpcPacket> Subscribe(string evt)
+    public async UniTask<IpcPacket> Subscribe(string evt, Action<IpcPacket> callback)
     {
         JObject content = new JObject
         {
@@ -138,14 +220,32 @@ public class DiscordRpc : MonoBehaviour
             ["evt"] = evt,
             ["nonce"] = Nonce()
         };
-        return await SendForRequest(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        var res = await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        listeners.Add(new Listener(evt, false, callback));
+        return res;
+    }
+    public async UniTask<IpcPacket> Unsubscribe(string evt, Action<IpcPacket> callback)
+    {
+        // TODO: 一つのイベントに複数のリスナーを登録している場合にはUNSUBSCRIBEを送らない
+        JObject content = new JObject
+        {
+            ["cmd"] = "UNSUBSCRIBE",
+            ["args"] = new JObject { },
+            ["evt"] = evt,
+            ["nonce"] = Nonce()
+        };
+        var res = await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        listeners.Remove(new Listener(evt, false, callback));
+        return res;
     }
 
     public async UniTask<IpcPacket> Close()
     {
         Debug.Log(new IpcPacket(IpcPacket.Opcodes.CLOSE, new JObject()));
-        return await SendForRequest(new IpcPacket(IpcPacket.Opcodes.CLOSE, new JObject()));
+        return await SendForResponse(new IpcPacket(IpcPacket.Opcodes.CLOSE, new JObject()));
     }
+
+    #endregion
 
     string Nonce()
     {
