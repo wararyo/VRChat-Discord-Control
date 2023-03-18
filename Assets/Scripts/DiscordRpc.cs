@@ -11,18 +11,20 @@ using Newtonsoft.Json.Linq;
 
 public class DiscordRpc : MonoBehaviour
 {
-
-    public string clientId;
-    public string clientSecret;
     public string[] scopes;
 
     [Serializable]
     public class BoolEvent : UnityEvent<bool> { }
 
+    [Space]
     public BoolEvent onMuteChanged;
 
     IpcClient client = new IpcClient();
     public bool isConnected { get; private set; } = false;
+
+    string clientId { get { return SettingsProvider.settings.clientId; } }
+    string clientSecret { get { return SettingsProvider.settings.clientSecret; } }
+    string accessToken { get { return SettingsProvider.settings.accessToken; } set { SettingsProvider.settings.accessToken = value; } }
 
     /// <summary>
     /// Discordから受信したパケットのリスナー
@@ -54,15 +56,26 @@ public class DiscordRpc : MonoBehaviour
         await client.Connect(this.GetCancellationTokenOnDestroy());
         await Handshake();
 
-        var authorizeData = await Authorize();
-        string code = authorizeData.data["data"]?["code"]?.Value<string>();
-        if (code == null) throw new Exception("Failed to get code.");
-        string accessToken = await FetchAccessToken(code);
-        await Authenticate(accessToken);
+        try
+        {
+            if (accessToken == "") throw new Exception();
+            else await Authenticate(accessToken);
+        }
+        catch
+        {
+            // 初回起動である等の理由でAccessTokenが存在しないか不正である場合はAuthorizeから行う
+            var authorizeData = await Authorize();
+            string code = authorizeData.data["data"]?["code"]?.Value<string>();
+            if (code == null) throw new Exception("Failed to get code.");
+            accessToken = await FetchAccessToken(code);
+
+            await Authenticate(accessToken);
+        }
 
         isConnected = true;
 
-        await Subscribe("VOICE_SETTINGS_UPDATE",OnVoiceSettingsUpdated);
+        Debug.Log("Muted: " + await GetMute());
+        await Subscribe("VOICE_SETTINGS_UPDATE", OnVoiceSettingsUpdated);
     }
 
     void OnDisable()
@@ -99,6 +112,7 @@ public class DiscordRpc : MonoBehaviour
     void OnVoiceSettingsUpdated(IpcPacket packet)
     {
         bool? muted = packet.data["data"]?["mute"]?.Value<bool>();
+        Debug.Log("Muted: " + muted);
         if (muted != null) onMuteChanged.Invoke((bool)muted);
     }
 
@@ -182,7 +196,9 @@ public class DiscordRpc : MonoBehaviour
             },
             ["nonce"] = Nonce()
         };
-        return await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        IpcPacket response = await SendForResponse(new IpcPacket(IpcPacket.Opcodes.FRAME, content));
+        if (response.data["evt"].Value<string>() == "ERROR") throw new Exception(response.data["data"]?["message"]?.Value<string>());
+        return response;
     }
 
     public async UniTask<bool?> GetMute()

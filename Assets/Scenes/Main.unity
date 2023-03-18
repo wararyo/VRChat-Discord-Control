@@ -1010,6 +1010,7 @@ GameObject:
   - component: {fileID: 1370345505}
   - component: {fileID: 1370345509}
   - component: {fileID: 1370345506}
+  - component: {fileID: 1370345507}
   m_Layer: 0
   m_Name: Manager
   m_TagString: Untagged
@@ -1043,12 +1044,25 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 142ef45931b67804fbdaf93c350beb47, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  clientId: 1013325060389478420
-  clientSecret: 
   scopes:
   - rpc
   - rpc.voice.write
   - rpc.voice.read
+  onMuteChanged:
+    m_PersistentCalls:
+      m_Calls: []
+--- !u!114 &1370345507
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1370345504}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e53121129f03a9440a904f62190a42ab, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!114 &1370345509
 MonoBehaviour:
   m_ObjectHideFlags: 0
